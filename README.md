@@ -2,7 +2,7 @@
 
 Add a source-image editing tool and skill for Hermes Agent.
 
-Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
+Chinese documentation(中文文档): [README.zh-CN.md](README.zh-CN.md)
 
 This project is built for Hermes Agent users who run a third-party main model, such as Kimi K2.6, while using Codex/OpenAI GPT Image 2 for image generation. It helps Hermes route image-to-image requests through a real source-image input path instead of asking the text model to describe the image and redraw it from text.
 
