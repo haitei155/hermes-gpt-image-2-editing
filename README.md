@@ -2,6 +2,8 @@
 
 Add a source-image editing tool and skill for Hermes Agent.
 
+Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
+
 This project is built for Hermes Agent users who run a third-party main model, such as Kimi K2.6, while using Codex/OpenAI GPT Image 2 for image generation. It helps Hermes route image-to-image requests through a real source-image input path instead of asking the text model to describe the image and redraw it from text.
 
 ## What It Adds
@@ -158,3 +160,7 @@ systemctl restart hermes-gateway
 - `skills/creative/gpt-image-2-editing/SKILL.md` -> `~/.hermes/skills/creative/gpt-image-2-editing/SKILL.md`
 
 The installer also makes small best-effort patches so Hermes UI/help text mentions `image_edit` alongside `image_generate`.
+
+## License
+
+Apache License 2.0.
