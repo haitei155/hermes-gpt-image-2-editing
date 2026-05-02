@@ -319,7 +319,7 @@ IMAGE_EDIT_SCHEMA = {
     "name": "image_edit",
     "description": (
         "Edit an existing image using GPT Image 2 through Codex/ChatGPT OAuth. "
-        "Use this for image-to-image, 图生图, 改图, 局部修改, editing a source/reference image, preserving pose/composition/identity, "
+        "Use this for image-to-image, reference-image editing, partial modification, editing a source/reference image, preserving pose/composition/identity, "
         "or replacing parts of an existing picture. Requires an absolute local image_path."
     ),
     "parameters": {
@@ -366,5 +366,5 @@ registry.register(
     check_fn=check_image_edit_requirements,
     requires_env=[],
     is_async=False,
-    emoji="🖌️",
+    emoji="edit",
 )

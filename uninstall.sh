@@ -20,8 +20,8 @@ root = Path(sys.argv[1])
 patches = [
     (
         root / "hermes_cli" / "tools_config.py",
-        '("image_gen",       "🎨 Image Generation",          "image_generate, image_edit"),',
-        '("image_gen",       "🎨 Image Generation",          "image_generate"),',
+        "image_generate, image_edit",
+        "image_generate",
     ),
     (
         root / "hermes_cli" / "config.py",
@@ -35,7 +35,7 @@ for path, old, new in patches:
         continue
     text = path.read_text(encoding="utf-8")
     if old in text:
-        path.write_text(text.replace(old, new), encoding="utf-8")
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
         print(f"Reverted {path}")
 PY
 
