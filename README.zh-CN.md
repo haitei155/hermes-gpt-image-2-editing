@@ -1,22 +1,21 @@
 # Hermes GPT Image 2 Editing
 
-为 Hermes Agent 添加一个面向源图的 GPT Image 2 图像编辑工具和配套 skill。
+为 Hermes Agent 增加真正的 GPT Image 2 图生图/改图工具和 skill。
 
 English documentation: [README.md](README.md)
 
-这个项目适用于这样的 Hermes 配置：主对话模型使用第三方模型，例如 Kimi K2.6，但图像生成能力通过 Codex/OpenAI GPT Image 2 提供。它的目标是让 Hermes 在处理图生图、参考图编辑、局部修改时，把原图作为 `input_image` 传给 GPT Image 2，而不是先让文本模型描述原图，再靠提示词重新文生图。
+这个项目适合这样的 Hermes 配置：主对话模型可以是第三方模型，但图片生成/编辑能力通过 Hermes 已登录的 Codex/ChatGPT OAuth 使用 GPT Image 2。它的目标是让 Hermes 在处理改图、多图参考、风格迁移、配色参考时，直接把原始图片文件传给 GPT Image 2，而不是先用 `vision_analyze` 把图转成文字描述再文生图。
 
 ## 提供内容
 
-- `image_edit`：Hermes 工具，会通过 Codex/ChatGPT OAuth 后端把原图作为 `input_image` 传给 GPT Image 2。
-- `gpt-image-2-editing`：Hermes skill，会要求 agent 在遇到图生图、改图、参考图编辑、局部修改、保留姿势/构图/身份特征等任务时优先调用 `image_edit`。
-- 安装脚本会做少量可选 metadata patch，让 Hermes 的工具说明里也能看到 `image_edit`。
+- `image_edit`：Hermes 工具，会把主底图和可选参考图作为 `input_image` 传给 GPT Image 2。
+- `gpt-image-2-editing`：Hermes skill，要求 agent 在图生图、改图、多图参考、保留人物五官/姿势/构图时优先用 `image_edit`。
+- gateway 路由补丁：识别改图/多图参考任务后，跳过自动 `vision_analyze`，保留原始图片文件给图片模型。
+- 工具集 metadata 补丁：让 `image_edit` 和 `image_generate` 一起出现在 `image_gen` 工具集中。
 
-## 重要前置条件
+## 前置条件
 
-你需要自己的 GPT Plus 账号，并且该账号需要可用 Codex。
-
-安装这个项目之前，必须先在 Hermes 里完成 Codex 配置和登录，可以通过 Hermes WebUI，也可以用 CLI：
+你需要自己的 GPT Plus 账号，并且该账号可用 Codex。Hermes 里需要先完成 Codex 登录：
 
 ```bash
 hermes auth codex
@@ -26,34 +25,60 @@ hermes auth codex
 
 ## 为什么需要它
 
-Hermes 内置的 `image_generate` 更偏向文生图。如果用户要求“基于这张图修改”，agent 可能会先描述原图，再把描述和修改要求拼成 prompt 交给 GPT Image 2 重新生成。这样很容易丢失姿势、构图、人脸相似度、服装细节、光照和背景结构。
-
-本项目希望把链路变成：
+不理想的链路是：
 
 ```text
-用户要求编辑已有图片
--> Hermes 加载 gpt-image-2-editing skill
--> Hermes 调用 image_edit(image_path, prompt, ...)
--> image_edit 把原图作为 input_image 传入
--> GPT Image 2 返回编辑后的图片
+上传图片 -> vision_analyze 文字描述 -> image_generate 重新文生图
 ```
 
-即使 Codex 后端拒绝某些严格编辑参数，fallback 路径仍会把源图传给模型；这不是纯文本重绘。
+这种链路会丢失五官身份、精确配色、服装/发饰细节、像素画风、姿势和构图。
 
-## 适用场景
+目标链路是：
 
-- 基于已有图片做编辑，而不是只靠文字重新生成。
-- 需要尽量保留原图姿势、镜头角度、构图、人脸身份、背景结构的图生图。
-- 替换衣服、发型、道具、背景、物体、颜色或风格。
-- 角色/cosplay 转换，但希望原图构图和人物姿态仍然接近。
-- Hermes 主模型使用第三方 API，但希望图像生成和编辑由 Codex/OpenAI GPT Image 2 负责。
-- 飞书、QQ、Telegram、Slack 等 Hermes 网关场景下复用同一套图片编辑能力。
+```text
+上传图片 -> image_edit 原始图片输入 -> GPT Image 2 改图结果
+```
 
-不适用于：
+例如用户说“把图2改成图1的像素风格，服装和发饰颜色参考图3”，gateway 会提示 agent 把上传顺序映射为工具角色：
 
-- 没有源图的纯文生图。请继续使用 Hermes `image_generate`。
-- 精确到像素的 Photoshop 式确定性编辑。这仍然是模型编辑，不是传统图像软件。
-- 未考虑 Codex/OpenAI 账号限制的大规模批处理任务。
+```text
+image_path = 上传的图2
+reference_image_paths = [上传的图1, 上传的图3]
+prompt = "Edit the PRIMARY SOURCE. Use REFERENCE IMAGE 1 only for style. Use REFERENCE IMAGE 2 only for palette/clothing colors."
+```
+
+## 效果演示
+
+下面这个例子就是本项目重点优化的场景：用户在飞书里一次上传三张参考图，要求 Hermes 以第二张图为人物底图，参考第一张图的像素画风，并参考第三张图的服装与发饰配色。
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>1. 飞书里的多图改图请求</strong><br>
+      用户用自然语言指定图片角色：图2是人物底图，图1是像素画风参考，图3是配色参考。
+      <br><br>
+      <img src="assets/demo-feishu-request.png" alt="飞书多图请求：要求 Hermes 将图2改成图1画风并参考图3配色" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <strong>2. Hermes 直接调用 image_edit</strong><br>
+      agent 使用原始图片文件调用 <code>image_edit</code>，并返回多图参考后的像素风结果，而不是先把参考图转成文字描述。
+      <br><br>
+      <img src="assets/demo-feishu-result.png" alt="Hermes image_edit 多图参考生成的像素风人物效果图" width="100%">
+    </td>
+  </tr>
+</table>
+
+关键改进不只是最终图片，而是路由方式：
+
+```text
+飞书上传图片 -> Hermes 缓存的原始图片路径 -> image_edit(image_path, reference_image_paths, prompt)
+```
+
+避免退回这种有损链路：
+
+```text
+飞书上传图片 -> vision_analyze 文字描述 -> 文生图重绘
+```
 
 ## 安装
 
@@ -71,7 +96,7 @@ cd hermes-gpt-image-2-editing
 systemctl restart hermes-gateway
 ```
 
-如果只是本地 CLI 使用，安装后开启新的 Hermes 会话即可。
+如果只在本地 CLI 使用，安装后开启新的 Hermes 会话即可。
 
 ## 验证
 
@@ -83,38 +108,38 @@ discover_builtin_tools()
 entry = registry.get_entry("image_edit")
 print("image_edit registered:", bool(entry))
 if entry:
-    print(entry.toolset, entry.schema["description"])
+    print(entry.toolset)
+    print("reference_image_paths" in entry.schema["parameters"]["properties"])
 PY
 ```
 
-预期看到：
+预期输出：
 
 ```text
 image_edit registered: True
+image_gen
+True
 ```
 
-也可以确认 skill 是否存在：
+## 示例
 
-```bash
-hermes skills list | grep gpt-image-2-editing
-```
-
-## 示例提示词
+用户需求：
 
 ```text
-Use image_edit. Edit /root/.hermes/image_cache/source.png.
-Preserve the original pose, camera angle, face identity, lighting direction, and main background.
-Change the outfit into Fate Rider Medusa's outfit, change the hair to a purple cosplay wig,
-replace the yellow pom-poms with silver chained daggers, and remove the Blue Archive halo.
+将图2修改为图1的 late-90s 像素画风，保留图2人物五官和表情，服装颜色与发饰颜色参考图3，背景色 #c0c0f8，比例 16:9。
 ```
 
-agent 应该优先调用：
+agent 应该调用：
 
 ```text
 image_edit(
-  image_path="/root/.hermes/image_cache/source.png",
-  prompt="Edit the provided source image. Preserve ... Change ...",
-  aspect_ratio="portrait",
+  image_path="/path/to/uploaded-image-2.png",
+  reference_image_paths=[
+    "/path/to/uploaded-image-1.png",
+    "/path/to/uploaded-image-3.png"
+  ],
+  prompt="Edit the PRIMARY SOURCE. Preserve its facial identity, expression, pose, and composition. Use REFERENCE IMAGE 1 only for the late-90s pixel-art rendering style. Use REFERENCE IMAGE 2 only for clothing colors, hair accessory colors, and palette. Set a solid #c0c0f8 background. Avoid collage, head transplant, and pasted reference parts.",
+  aspect_ratio="landscape",
   input_fidelity="high"
 )
 ```
@@ -125,6 +150,13 @@ image_edit(
 ./uninstall.sh
 systemctl restart hermes-gateway
 ```
+
+## 安装的文件
+
+- `tools/image_edit_tool.py` -> `~/.hermes/hermes-agent/tools/image_edit_tool.py`
+- `skills/creative/gpt-image-2-editing/SKILL.md` -> `~/.hermes/skills/creative/gpt-image-2-editing/SKILL.md`
+
+安装脚本还会给 Hermes 的工具集 metadata 和 `gateway/run.py` 打补丁，让直接改图任务不会被自动转成 `vision_analyze` 文字描述。
 
 ## License
 

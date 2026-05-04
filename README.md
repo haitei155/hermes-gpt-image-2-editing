@@ -1,74 +1,83 @@
 # Hermes GPT Image 2 Editing
 
-Add a source-image editing tool and skill for Hermes Agent.
+Add a real image-to-image editing tool and skill for Hermes Agent.
 
 Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
 
-This project is built for Hermes Agent users who run a third-party main model, such as Kimi K2.6, while using Codex/OpenAI GPT Image 2 for image generation. It helps Hermes route image-to-image requests through a real source-image input path instead of asking the text model to describe the image and redraw it from text.
+This project is for Hermes Agent setups where the main conversation model may be a third-party model, while GPT Image 2 is available through Hermes' Codex/ChatGPT OAuth login. It helps Hermes route editing requests through raw image inputs instead of first describing uploaded images with `vision_analyze` and redrawing from text.
 
 ## What It Adds
 
-- `image_edit`: a Hermes tool that passes the original file as `input_image` to GPT Image 2 through the Codex/ChatGPT OAuth backend.
-- `gpt-image-2-editing`: a Hermes skill that tells the agent to prefer `image_edit` whenever the user asks to edit, transform, restyle, preserve, or partially modify an existing image.
-- Small optional metadata patches so Hermes UI/help text can mention `image_edit` alongside `image_generate`.
+- `image_edit`: a Hermes tool that sends the primary source image and optional reference images as `input_image` parts to GPT Image 2 through Codex/ChatGPT OAuth.
+- `gpt-image-2-editing`: a Hermes skill that tells the agent to prefer `image_edit` for image-to-image, multi-reference editing, style transfer, palette transfer, and identity-preserving edits.
+- Gateway routing patch: direct edit/reference requests skip automatic `vision_analyze`, preserving the original image files for the image model.
+- Toolset metadata patches so `image_edit` appears alongside `image_generate`.
 
-## Important Requirement
+## Requirement
 
-You must have your own GPT Plus account with Codex access enabled/available.
-
-Before installing this project, Codex must already be configured and logged in inside Hermes, either from Hermes WebUI or from CLI:
+You need your own GPT Plus account with Codex access enabled/available, and Hermes must already be logged into Codex:
 
 ```bash
 hermes auth codex
 ```
 
-This project does not provide an OpenAI account, a GPT Plus subscription, Codex entitlement, an API key, or a bypass around account requirements. It only reuses the Codex login that Hermes already has.
+This project does not provide an OpenAI account, GPT Plus subscription, Codex entitlement, API key, or any bypass around account requirements.
 
 ## Why This Exists
 
-Hermes' built-in `image_generate` flow is text-to-image. When a user asks to edit a source image, the agent may first describe the original image and then ask GPT Image 2 to redraw it from text. That loses pose, composition, face similarity, clothing details, lighting, and background structure.
-
-This project changes the intended flow to:
+The bad flow:
 
 ```text
-User asks to edit an existing image
--> Hermes loads the gpt-image-2-editing skill
--> Hermes calls image_edit(image_path, prompt, ...)
--> image_edit passes the original file as input_image
--> GPT Image 2 returns an edited image
+uploaded images -> vision_analyze text descriptions -> image_generate redraw
 ```
 
-The fallback path still sends the source image to the model. It is not the same as pure text-to-image redraw.
+That loses facial identity, exact colors, clothing/accessory details, pixel style, pose, and composition.
 
-## Use Cases
+The intended flow:
 
-Use this for:
+```text
+uploaded images -> image_edit raw input_image payloads -> GPT Image 2 edit result
+```
 
-- Editing an existing image instead of redrawing it from a text-only description.
-- Image-to-image workflows where the original pose, camera angle, layout, face identity, or background should remain close.
-- Outfit, hairstyle, prop, background, object, color, and style changes based on a source image.
-- Character or cosplay transformations where the source composition should stay recognizable.
-- Hermes setups where the conversation model is a third-party provider but GPT Image 2 is available through Codex.
-- Feishu, QQ, Telegram, Slack, or other Hermes gateway workflows that need a reusable image editing tool.
+For multi-image prompts such as "edit image 2 in image 1's pixel style, use image 3 for clothing colors", the gateway tells the agent to map upload numbers into tool roles:
 
-Do not use this for:
+```text
+image_path = uploaded image 2
+reference_image_paths = [uploaded image 1, uploaded image 3]
+prompt = "Edit the PRIMARY SOURCE. Use REFERENCE IMAGE 1 only for style. Use REFERENCE IMAGE 2 only for palette/clothing colors."
+```
 
-- Pure text-to-image generation with no source image. Use Hermes `image_generate` for that.
-- Exact deterministic Photoshop-style edits. This is model-based image editing, not pixel-level raster editing.
-- Large automated batch jobs without checking Codex/OpenAI account limits.
+## Demo
 
-## Requirements
+This example shows the exact case this package is designed to improve: a Feishu message with three reference images, where the user asks Hermes to edit the second image, borrow pixel-art style from the first, and borrow clothing/accessory colors from the third.
 
-- Hermes Agent installed from source or an editable checkout.
-- A configured Hermes home, usually `~/.hermes`.
-- Your own GPT Plus account with Codex access.
-- Codex login already completed in Hermes WebUI or CLI.
-- Hermes image generation configured to use the Codex image backend, for example:
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>1. Multi-image request in Feishu</strong><br>
+      The prompt names image roles in natural language: image 2 is the base character, image 1 is the pixel-art style reference, and image 3 is the palette reference.
+      <br><br>
+      <img src="assets/demo-feishu-request.png" alt="Feishu multi-image request asking Hermes to edit image 2 using image 1 style and image 3 colors" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <strong>2. Hermes uses image_edit directly</strong><br>
+      The agent calls <code>image_edit</code> with raw image files, then returns a generated pixel-art result instead of relying on text-only image descriptions.
+      <br><br>
+      <img src="assets/demo-feishu-result.png" alt="Hermes image_edit result showing a pixel-art character generated from multiple references" width="100%">
+    </td>
+  </tr>
+</table>
 
-```yaml
-image_gen:
-  provider: openai-codex
-  model: gpt-image-2-medium
+The important behavior is not only the final picture. It is the routing:
+
+```text
+Feishu uploads -> raw cached image paths -> image_edit(image_path, reference_image_paths, prompt)
+```
+
+The gateway patch avoids the lossy path:
+
+```text
+Feishu uploads -> vision_analyze descriptions -> text-to-image redraw
 ```
 
 ## Install
@@ -81,7 +90,7 @@ cd hermes-gpt-image-2-editing
 ./install.sh
 ```
 
-Then restart the gateway if you use Hermes from Feishu, QQ, Telegram, Slack, Discord, or another chat platform:
+Then restart the gateway if you use Feishu, QQ, Telegram, Slack, Discord, or another chat platform:
 
 ```bash
 systemctl restart hermes-gateway
@@ -91,8 +100,6 @@ For local CLI use, start a new Hermes session after installation.
 
 ## Verify
 
-Run:
-
 ```bash
 cd ~/.hermes/hermes-agent
 python - <<'PY'
@@ -101,7 +108,8 @@ discover_builtin_tools()
 entry = registry.get_entry("image_edit")
 print("image_edit registered:", bool(entry))
 if entry:
-    print(entry.toolset, entry.schema["description"])
+    print(entry.toolset)
+    print("reference_image_paths" in entry.schema["parameters"]["properties"])
 PY
 ```
 
@@ -109,43 +117,32 @@ Expected:
 
 ```text
 image_edit registered: True
+image_gen
+True
 ```
 
-You should also see the skill:
+## Example
 
-```bash
-hermes skills list | grep gpt-image-2-editing
-```
-
-## Example Prompt
+User intent:
 
 ```text
-Use image_edit. Edit /root/.hermes/image_cache/source.png.
-Preserve the original pose, camera angle, face identity, lighting direction, and main background.
-Change the outfit into Fate Rider Medusa's outfit, change the hair to a purple cosplay wig,
-replace the yellow pom-poms with silver chained daggers, and remove the Blue Archive halo.
+Transform image 2 into image 1's late-90s pixel-art style. Preserve image 2's facial features and expression. Use image 3 for clothing colors and hair accessory colors. Solid #c0c0f8 background. 16:9.
 ```
 
 The agent should call:
 
 ```text
 image_edit(
-  image_path="/root/.hermes/image_cache/source.png",
-  prompt="Edit the provided source image. Preserve ... Change ...",
-  aspect_ratio="portrait",
+  image_path="/path/to/uploaded-image-2.png",
+  reference_image_paths=[
+    "/path/to/uploaded-image-1.png",
+    "/path/to/uploaded-image-3.png"
+  ],
+  prompt="Edit the PRIMARY SOURCE. Preserve its facial identity, expression, pose, and composition. Use REFERENCE IMAGE 1 only for the late-90s pixel-art rendering style. Use REFERENCE IMAGE 2 only for clothing colors, hair accessory colors, and palette. Set a solid #c0c0f8 background. Avoid collage, head transplant, and pasted reference parts.",
+  aspect_ratio="landscape",
   input_fidelity="high"
 )
 ```
-
-## Backend Behavior
-
-The tool tries multiple request shapes because the Codex GPT Image 2 backend may reject optional edit parameters depending on the current Hermes/Codex backend behavior:
-
-- `edit+input_fidelity`: strict edit mode worked.
-- `input_fidelity`: source image plus fidelity worked without explicit action.
-- `input_image_only`: source image was provided, optional edit parameters were not accepted.
-
-The returned JSON includes `edit_mode`, `output_path`, and `source_image_path` so you can inspect which path succeeded.
 
 ## Uninstall
 
@@ -159,7 +156,7 @@ systemctl restart hermes-gateway
 - `tools/image_edit_tool.py` -> `~/.hermes/hermes-agent/tools/image_edit_tool.py`
 - `skills/creative/gpt-image-2-editing/SKILL.md` -> `~/.hermes/skills/creative/gpt-image-2-editing/SKILL.md`
 
-The installer also makes small best-effort patches so Hermes UI/help text mentions `image_edit` alongside `image_generate`.
+The installer also patches Hermes toolset metadata and `gateway/run.py` so direct image edits do not get converted to lossy `vision_analyze` descriptions.
 
 ## License
 

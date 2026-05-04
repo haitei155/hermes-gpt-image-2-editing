@@ -1,8 +1,8 @@
-"""OpenAI/Codex-backed image editing tool for Hermes Agent.
+"""OpenAI/Codex-backed image editing tool.
 
-The tool always sends the source image as an ``input_image`` to the Codex
-Responses ``image_generation`` tool, so image-to-image/edit requests do not
-degrade into pure text-to-image redraws.
+This tool is intentionally separate from image_generate: it always sends the
+source image as an input_image to the Codex Responses image_generation tool so
+image-to-image/edit requests do not degrade into pure text-to-image redraws.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import logging
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from agent.image_gen_provider import (
     DEFAULT_ASPECT_RATIO,
@@ -31,9 +31,15 @@ DEFAULT_MODEL = "gpt-image-2-medium"
 _CODEX_CHAT_MODEL = "gpt-5.4"
 _CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 _CODEX_INSTRUCTIONS = (
-    "You are an assistant that must edit the provided input image with the "
-    "image_generation tool. Preserve the source image composition, identity, "
-    "pose, and layout unless the user explicitly asks to change them."
+    "You are an assistant that must edit the PRIMARY SOURCE image with the "
+    "image_generation tool. Additional images are references only. Preserve "
+    "the primary source composition, identity, face, pose, and layout unless "
+    "the user explicitly asks to change them. When references conflict, obey "
+    "the role labels in the prompt: style references control rendering style, "
+    "palette references control colors/materials, and the primary source "
+    "controls subject identity and structure. Do not create a collage, do not "
+    "paste or transplant the head/body/clothing from a reference image, and do "
+    "not let a style reference override the source person's facial identity."
 )
 
 _MODELS: Dict[str, Dict[str, Any]] = {
@@ -143,11 +149,80 @@ def _collect_image_b64_from_response(final: Any) -> Optional[str]:
     return None
 
 
+def _normalize_reference_image_paths(reference_image_paths: Any) -> List[str]:
+    if reference_image_paths is None:
+        return []
+    if isinstance(reference_image_paths, str):
+        return [reference_image_paths] if reference_image_paths.strip() else []
+    if isinstance(reference_image_paths, Sequence):
+        normalized: List[str] = []
+        for item in reference_image_paths:
+            if isinstance(item, str) and item.strip():
+                normalized.append(item.strip())
+        return normalized
+    return []
+
+
+def _load_labeled_images(
+    image_path: str,
+    reference_image_paths: Any = None,
+) -> Tuple[List[Dict[str, str]], str, List[str]]:
+    data_url, source_path = _image_to_data_url(image_path)
+    images = [{
+        "role": "PRIMARY SOURCE / BASE IMAGE",
+        "path": source_path,
+        "data_url": data_url,
+    }]
+
+    reference_paths: List[str] = []
+    for idx, ref_path in enumerate(_normalize_reference_image_paths(reference_image_paths), start=1):
+        ref_data_url, resolved = _image_to_data_url(ref_path)
+        reference_paths.append(resolved)
+        images.append({
+            "role": f"REFERENCE IMAGE {idx}",
+            "path": resolved,
+            "data_url": ref_data_url,
+        })
+
+    return images, source_path, reference_paths
+
+
+def _build_edit_content(prompt: str, images: Sequence[Dict[str, str]]) -> List[Dict[str, str]]:
+    image_manifest = "\n".join(
+        f"- {idx}. {image['role']}: {image['path']}"
+        for idx, image in enumerate(images, start=1)
+    )
+    full_prompt = (
+        f"{prompt}\n\n"
+        "Image roles for this edit:\n"
+        f"{image_manifest}\n\n"
+        "Apply the edit to image 1 only. Use later images strictly as visual "
+        "references according to the user's requested roles. Within this tool "
+        "call, image 1 is always the PRIMARY SOURCE / BASE IMAGE, even if it "
+        "was originally uploaded as image 2 or \u56fe2 in the user's message. If "
+        "the prompt contains stale original upload numbering that conflicts "
+        "with the role manifest, trust the role manifest above. Do not "
+        "composite or stitch parts from "
+        "reference images onto the primary source; transfer only the requested "
+        "style, palette, clothing colors, accessory colors, or other visual "
+        "attributes."
+    )
+
+    content: List[Dict[str, str]] = [{"type": "input_text", "text": full_prompt}]
+    for idx, image in enumerate(images, start=1):
+        content.append({
+            "type": "input_text",
+            "text": f"Image {idx}: {image['role']} ({image['path']})",
+        })
+        content.append({"type": "input_image", "image_url": image["data_url"]})
+    return content
+
+
 def _stream_image_edit(
     client: Any,
     *,
     prompt: str,
-    data_url: str,
+    images: Sequence[Dict[str, str]],
     size: str,
     quality: str,
     input_fidelity: str,
@@ -176,10 +251,7 @@ def _stream_image_edit(
         input=[{
             "type": "message",
             "role": "user",
-            "content": [
-                {"type": "input_text", "text": prompt},
-                {"type": "input_image", "image_url": data_url},
-            ],
+            "content": _build_edit_content(prompt, images),
         }],
         tools=[tool],
         tool_choice={
@@ -208,6 +280,7 @@ def _stream_image_edit(
 def image_edit_tool(
     image_path: str,
     prompt: str,
+    reference_image_paths: Any = None,
     aspect_ratio: str = DEFAULT_ASPECT_RATIO,
     input_fidelity: str = "high",
 ) -> str:
@@ -228,7 +301,10 @@ def image_edit_tool(
         ), ensure_ascii=False)
 
     try:
-        data_url, source_path = _image_to_data_url(image_path)
+        images, source_path, reference_paths = _load_labeled_images(
+            image_path,
+            reference_image_paths,
+        )
     except Exception as exc:
         return json.dumps(error_response(
             error=str(exc),
@@ -263,6 +339,8 @@ def image_edit_tool(
     quality = meta["quality"]
 
     last_error: Optional[Exception] = None
+    # Preferred official shape first; fall back if the Codex backend lags on
+    # specific optional parameters while still keeping the input_image attached.
     variants: Iterable[tuple[bool, bool, str]] = (
         (True, True, "edit+input_fidelity"),
         (False, True, "input_fidelity"),
@@ -273,7 +351,7 @@ def image_edit_tool(
             b64 = _stream_image_edit(
                 client,
                 prompt=prompt,
-                data_url=data_url,
+                images=images,
                 size=size,
                 quality=quality,
                 input_fidelity=input_fidelity,
@@ -290,6 +368,7 @@ def image_edit_tool(
                     provider="openai-codex",
                     extra={
                         "source_image": source_path,
+                        "reference_images": reference_paths,
                         "size": size,
                         "quality": quality,
                         "input_fidelity": input_fidelity if include_input_fidelity else None,
@@ -319,15 +398,27 @@ IMAGE_EDIT_SCHEMA = {
     "name": "image_edit",
     "description": (
         "Edit an existing image using GPT Image 2 through Codex/ChatGPT OAuth. "
-        "Use this for image-to-image, reference-image editing, partial modification, editing a source/reference image, preserving pose/composition/identity, "
-        "or replacing parts of an existing picture. Requires an absolute local image_path."
+        "Use this for image-to-image, \u56fe\u751f\u56fe, \u6539\u56fe, \u5c40\u90e8\u4fee\u6539, editing a source/reference image, preserving pose/composition/identity, "
+        "or replacing parts of an existing picture. Requires an absolute local image_path. "
+        "For multi-image requests, put the base image to edit in image_path and put style/color/pose references in reference_image_paths. "
+        "Rewrite prompts to use PRIMARY SOURCE / REFERENCE IMAGE roles instead of stale upload numbers after choosing image_path. "
+        "Do not call vision_analyze before or after normal multi-image edit/reference tasks unless the user explicitly asks for visual QA; this tool sends the raw image files to the image model."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "image_path": {
                 "type": "string",
-                "description": "Absolute path to the source image file (.png, .jpg, .jpeg, .webp).",
+                "description": "Absolute path to the primary source/base image file to edit (.png, .jpg, .jpeg, .webp).",
+            },
+            "reference_image_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional absolute paths to reference images. Use for multi-image edits: "
+                    "style reference, palette/clothing reference, accessory reference, etc. "
+                    "Do not put the base image here."
+                ),
             },
             "prompt": {
                 "type": "string",
@@ -353,6 +444,7 @@ def _handle_image_edit(args, **kw):
     return image_edit_tool(
         image_path=args.get("image_path", ""),
         prompt=args.get("prompt", ""),
+        reference_image_paths=args.get("reference_image_paths"),
         aspect_ratio=args.get("aspect_ratio", DEFAULT_ASPECT_RATIO),
         input_fidelity=args.get("input_fidelity", "high"),
     )
@@ -366,5 +458,5 @@ registry.register(
     check_fn=check_image_edit_requirements,
     requires_env=[],
     is_async=False,
-    emoji="edit",
+    emoji="image",
 )
