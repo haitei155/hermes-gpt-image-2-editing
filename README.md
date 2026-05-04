@@ -2,7 +2,7 @@
 
 Add a real image-to-image editing tool and skill for Hermes Agent.
 
-Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
+Chinese documentation (中文文档): [README.zh-CN.md](README.zh-CN.md)
 
 This project is for Hermes Agent setups where the main conversation model may be a third-party model, while GPT Image 2 is available through Hermes' Codex/ChatGPT OAuth login. It helps Hermes route editing requests through raw image inputs instead of first describing uploaded images with `vision_analyze` and redrawing from text.
 
