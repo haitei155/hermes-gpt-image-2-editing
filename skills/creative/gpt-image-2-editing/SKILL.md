@@ -1,6 +1,6 @@
 ---
 name: gpt-image-2-editing
-version: 1.1.0
+version: 1.1.1
 description: Use this skill whenever the user asks to edit existing images, do image-to-image generation, 图生图, 改图, multi-image reference editing, preserve composition/pose/face/identity from a source image, transfer style/palette/clothing/accessory colors from references, or complains that image generation is only redrawing from text. Prefer image_edit over image_generate for these tasks.
 metadata:
   hermes:

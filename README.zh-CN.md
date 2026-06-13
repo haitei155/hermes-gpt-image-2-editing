@@ -13,6 +13,14 @@ English documentation: [README.md](README.md)
 - gateway 路由补丁：识别改图/多图参考任务后，跳过自动 `vision_analyze`，保留原始图片文件给图片模型。
 - 工具集 metadata 补丁：让 `image_edit` 和 `image_generate` 一起出现在 `image_gen` 工具集中。
 
+## 最近更新
+
+和上一次版本相比，这次主要同步了 VPS 生产环境上的修复：
+
+- 保留 v1.1 已加入的多参考图编辑流程，以及主图/源图/参考图的角色映射说明。
+- 新增 Codex 流式解析兜底：当 `openai-python` 在图片结果已经返回后，又因为最终 `response.completed` 里的 `output=None` 抛出 `TypeError: 'NoneType' object is not iterable` 时，`image_edit` 会继续使用已捕获的图片结果，而不是把任务判定为失败。
+- 这可以避免 GPT Image 2 实际已经改图成功，却在流结束阶段被丢弃的问题。
+
 ## 前置条件
 
 你需要自己的 GPT Plus 账号，并且该账号可用 Codex。Hermes 里需要先完成 Codex 登录：

@@ -149,6 +149,10 @@ def _collect_image_b64_from_response(final: Any) -> Optional[str]:
     return None
 
 
+def _is_codex_stream_final_parse_error(exc: BaseException) -> bool:
+    return "'NoneType' object is not iterable" in str(exc)
+
+
 def _normalize_reference_image_paths(reference_image_paths: Any) -> List[str]:
     if reference_image_paths is None:
         return []
@@ -260,19 +264,32 @@ def _stream_image_edit(
             "tools": [{"type": "image_generation"}],
         },
     ) as stream:
-        for event in stream:
-            event_type = getattr(event, "type", "")
-            if event_type == "response.output_item.done":
-                item = getattr(event, "item", None)
-                if getattr(item, "type", None) == "image_generation_call":
-                    result = getattr(item, "result", None)
-                    if isinstance(result, str) and result:
-                        image_b64 = result
-            elif event_type == "response.image_generation_call.partial_image":
-                partial = getattr(event, "partial_image_b64", None)
-                if isinstance(partial, str) and partial:
-                    image_b64 = partial
-        final = stream.get_final_response()
+        try:
+            for event in stream:
+                event_type = getattr(event, "type", "")
+                if event_type == "response.output_item.done":
+                    item = getattr(event, "item", None)
+                    if getattr(item, "type", None) == "image_generation_call":
+                        result = getattr(item, "result", None)
+                        if isinstance(result, str) and result:
+                            image_b64 = result
+                elif event_type == "response.image_generation_call.partial_image":
+                    partial = getattr(event, "partial_image_b64", None)
+                    if isinstance(partial, str) and partial:
+                        image_b64 = partial
+            final = stream.get_final_response()
+        except TypeError as exc:
+            # Codex may send response.completed with output=None after the image
+            # result; openai-python 2.32.0 crashes while parsing that final
+            # snapshot. Keep the captured image/edit result.
+            if image_b64 and _is_codex_stream_final_parse_error(exc):
+                logger.debug(
+                    "Codex stream final response parse failed after image edit result; "
+                    "using captured image_generation result",
+                    exc_info=True,
+                )
+                return image_b64
+            raise
 
     return image_b64 or _collect_image_b64_from_response(final)
 

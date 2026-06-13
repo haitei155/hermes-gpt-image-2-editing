@@ -13,6 +13,14 @@ This project is for Hermes Agent setups where the main conversation model may be
 - Gateway routing patch: direct edit/reference requests skip automatic `vision_analyze`, preserving the original image files for the image model.
 - Toolset metadata patches so `image_edit` appears alongside `image_generate`.
 
+## Latest Update
+
+Compared with the previous release, this update mainly syncs the production fix from the VPS:
+
+- Keeps the v1.1 multi-reference editing flow and role mapping for primary/source/reference images.
+- Adds a Codex streaming parser fallback: if `openai-python` crashes on a final `response.completed` payload with `output=None` after the image result has already arrived, `image_edit` now keeps the captured image instead of reporting `TypeError: 'NoneType' object is not iterable`.
+- This prevents successful GPT Image 2 edits from being discarded at the very end of the stream.
+
 ## Requirement
 
 You need your own GPT Plus account with Codex access enabled/available, and Hermes must already be logged into Codex:
